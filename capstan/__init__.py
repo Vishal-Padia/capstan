@@ -21,9 +21,11 @@ def _numpy(x):
     return np.asarray(x, dtype=np.float64)
 
 
+# One file per process: Ray workers and engine subprocesses write concurrently, and appends to one file can interleave.
 def record_phase(name, seconds, step=None):
-    with open(_out() / "phases.jsonl", "a") as f:
-        f.write(json.dumps({"step": step, "phase": name, "seconds": float(seconds)}) + "\n")
+    row = {"step": step, "phase": name, "seconds": float(seconds), "end": time.time()}
+    with open(_out() / f"phases_{os.getpid()}.jsonl", "a") as f:
+        f.write(json.dumps(row) + "\n")
 
 
 # Wall-clock time: the block must end on a sync point (e.g. results copied to CPU), or GPU work leaks into the next one.
@@ -36,12 +38,8 @@ def phase(name, step=None):
         record_phase(name, time.perf_counter() - start, step)
 
 
-def record_logprobs(rollout, trainer, step=None, timesteps=None):
+def record_logprobs(rollout, trainer, step, timesteps=None):
     arrays = {"rollout": _numpy(rollout), "trainer": _numpy(trainer)}
     if timesteps is not None:
         arrays["timesteps"] = _numpy(timesteps)
-    if step is not None:
-        arrays["step"] = np.asarray(step)
-    out = _out()
-    index = len(list(out.glob("logprobs_*.npz")))
-    np.savez(out / f"logprobs_{index:05d}.npz", **arrays)
+    np.savez(_out() / f"logprobs_step{step:06d}_pid{os.getpid()}.npz", **arrays)
