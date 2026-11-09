@@ -4,6 +4,7 @@ import runpy
 import sys
 
 import capstan
+from capstan.adapters import when_imported, wrap
 
 TRAINER_MODULE = "verl_omni.trainer.main_diffusion"
 
@@ -16,20 +17,15 @@ PHASES = {
     "timing_s/update_weights": "sync",
 }
 
-_WRAPPED = "_capstan_wrapped"
-
-
-def _wrap(owner, name, make):
-    original = getattr(owner, name)
-    if getattr(original, _WRAPPED, False):
-        return
-    wrapper = make(original)
-    setattr(wrapper, _WRAPPED, True)
-    setattr(owner, name, wrapper)
+# The drift hook runs before verl-omni logs the step, so log-probs wait here until Tracking.log gives the step number.
+_pending = []
 
 
 def _log(original):
     def log(self, data, step, *args, **kwargs):
+        for arrays in _pending:
+            capstan.record_logprobs(step=step, **arrays)
+        _pending.clear()
         for key, phase in PHASES.items():
             if key in data:
                 capstan.record_phase(phase, data[key], step)
@@ -44,7 +40,10 @@ def _log(original):
 # Called once per training step with the trainer recompute and the rollout log-probs of the same batch.
 def _corr_metrics(original):
     def compute(log_prob, rollout_log_prob, timesteps=None):
-        capstan.record_logprobs(rollout=rollout_log_prob, trainer=log_prob, timesteps=timesteps)
+        arrays = {"rollout": capstan._numpy(rollout_log_prob), "trainer": capstan._numpy(log_prob)}
+        if timesteps is not None:
+            arrays["timesteps"] = capstan._numpy(timesteps)
+        _pending.append(arrays)
         return original(log_prob, rollout_log_prob, timesteps=timesteps)
 
     return compute
@@ -53,11 +52,11 @@ def _corr_metrics(original):
 def install():
     if not os.environ.get("CAPSTAN_OUT"):
         return
-    from verl.utils.tracking import Tracking
-    from verl_omni.trainer.diffusion import rollout_correction
-
-    _wrap(Tracking, "log", _log)
-    _wrap(rollout_correction, "compute_rollout_corr_metrics_from_logprobs", _corr_metrics)
+    when_imported("verl.utils.tracking", lambda m: wrap(m.Tracking, "log", _log))
+    when_imported(
+        "verl_omni.trainer.diffusion.rollout_correction",
+        lambda m: wrap(m, "compute_rollout_corr_metrics_from_logprobs", _corr_metrics),
+    )
 
 
 def _ray_init(original):
@@ -77,6 +76,6 @@ def run(overrides):
     import ray
 
     install()
-    _wrap(ray, "init", _ray_init)
+    wrap(ray, "init", _ray_init)
     sys.argv = [TRAINER_MODULE, *overrides]
     runpy.run_module(TRAINER_MODULE, run_name="__main__", alter_sys=True)
