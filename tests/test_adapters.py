@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import types
 
 import numpy as np
 
@@ -54,3 +55,8 @@ def test_rollout_split_into_encode_steps_and_decode(tmp_path, monkeypatch):
         ("rollout/sde_step", 3.0),
         ("rollout/decode", 1.5),
     ]
+
+
+def test_missing_pipeline_records_nothing_and_says_why(caplog):
+    vllm_omni._patch_pipeline(types.SimpleNamespace())
+    assert "rollout split not recorded" in caplog.text

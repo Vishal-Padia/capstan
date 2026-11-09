@@ -1,10 +1,16 @@
+import logging
 import os
 
 import capstan
 from capstan.adapters import when_imported, wrap
 
-PIPELINE_MODULE = "verl_omni.pipelines.qwen_image_flow_grpo.vllm_omni_rollout_adapter"
-SCHEDULER_MODULE = "verl_omni.pipelines.schedulers.flow_match_sde"
+logger = logging.getLogger("capstan")
+
+# The one name Capstan relies on: the pipeline verl-omni exports from this package (its __all__). Subclasses such as
+# the MixGRPO pipeline call into it. The scheduler is found on the pipeline instance, not by import path.
+PIPELINE_PACKAGE = "verl_omni.pipelines.qwen_image_flow_grpo"
+PIPELINE_CLASS = "QwenImagePipelineWithLogProb"
+TESTED_WITH = "verl-omni f50117e"
 
 # (label, CUDA event) pairs for the request this process is generating; None outside a request.
 _marks = None
@@ -34,6 +40,9 @@ def _record(marks):
 def _forward(original):
     def forward(self, *args, **kwargs):
         global _marks
+        scheduler = getattr(self, "scheduler", None)
+        if scheduler is not None:
+            wrap(type(scheduler), "step", _step)
         _marks = []
         _mark("start")
         try:
@@ -71,14 +80,19 @@ def _step(original):
     return step
 
 
-def _patch_pipeline(module):
-    wrap(module.QwenImagePipelineWithLogProb, "forward", _forward)
-    wrap(module.QwenImagePipelineWithLogProb, "diffuse", _diffuse)
+def _patch_pipeline(package):
+    pipeline = getattr(package, PIPELINE_CLASS, None)
+    if pipeline is None or not hasattr(pipeline, "diffuse"):
+        # A profiler must not break training: record nothing, say why, and let capstan report flag the gap.
+        message = "%s.%s.diffuse not found; rollout split not recorded (tested with %s)"
+        logger.warning(message, PIPELINE_PACKAGE, PIPELINE_CLASS, TESTED_WITH)
+        return
+    wrap(pipeline, "forward", _forward)
+    wrap(pipeline, "diffuse", _diffuse)
 
 
 # vLLM general plugin: vllm-omni loads it in every engine process, including the diffusion worker.
 def register():
     if not os.environ.get("CAPSTAN_OUT"):
         return
-    when_imported(PIPELINE_MODULE, _patch_pipeline)
-    when_imported(SCHEDULER_MODULE, lambda m: wrap(m.FlowMatchSDEDiscreteScheduler, "step", _step))
+    when_imported(PIPELINE_PACKAGE, _patch_pipeline)
