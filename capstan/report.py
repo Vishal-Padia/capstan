@@ -51,9 +51,14 @@ def profile(run, skip):
 
     out = [f"# Profile\n\nMean over {n} training steps, skipping the first {skip} as warm-up.\n"]
     out.append(_table(["Phase", "Time per step (s)", "Share of step"], trainer_rows))
+    out.append("\n## Inside rollout\n")
     if part_rows:
-        out.append("\n## Inside rollout\n\nGPU time summed over rollout workers, per training step.\n")
+        out.append("GPU time summed over rollout workers, per training step.\n")
         out.append(_table(["Part", "GPU seconds per step", "Share of rollout GPU time", "Calls per step"], part_rows))
+    else:
+        out.append(
+            "Not recorded. The split needs the vLLM plugin to find verl-omni's pipeline; check the rollout logs."
+        )
     return "\n".join(out) + "\n"
 
 

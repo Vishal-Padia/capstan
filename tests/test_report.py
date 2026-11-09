@@ -30,6 +30,9 @@ def test_profile_and_drift_tables(tmp_path):
     assert "| ODE steps | 4.00 | 66.7% | 1 |" in profile
     assert "VAE decode" not in profile
 
+    (tmp_path / "phases_2.jsonl").unlink()
+    assert "Not recorded." in report.profile(tmp_path, skip=1)
+
     drift = report.drift(tmp_path)
     assert "This run failed: 4 of 8 entries over." in drift
     assert "| all | 8 |" in drift
