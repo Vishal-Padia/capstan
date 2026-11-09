@@ -2,11 +2,10 @@
 
 | Phase | Time per step (s) | Share of step |
 | --- | --- | --- |
-| Rollout, ODE steps | | |
-| Rollout, SDE-window steps | | |
-| Reward | | |
-| Trainer recompute | | |
-| Trainer update | | |
-| Weight sync | | |
-| Idle | | |
-| Total | | |
+
+## Inside rollout
+
+GPU time summed over rollout workers, per training step.
+
+| Part | GPU seconds per step | Share of rollout GPU time | Calls per step |
+| --- | --- | --- | --- |

@@ -18,7 +18,7 @@ This is a proof of concept on one model, one framework, one GPU configuration.
 
 | Deliverable | What it does | Output |
 | --- | --- | --- |
-| Profiler | Splits one MixGRPO step into rollout, reward, trainer recompute and update, weight sync, and idle time. Inside rollout, splits ODE steps from SDE-window steps. | [bench/profile.md](bench/profile.md) |
+| Profiler | Splits one MixGRPO step into rollout, reward, trainer recompute, trainer update, weight sync, and everything else, idle included. Inside rollout, splits text encoding, ODE steps, SDE-window steps and VAE decode. `capstan report` turns a recorded run into the tables. | [bench/profile.md](bench/profile.md) |
 | Numerics check | Records rollout log-probs for the SDE-window steps, recomputes them on the trainer for the same trajectory, reports the drift. Also checks whether rollout log-probs change with batch size. Pass threshold, fixed before the first real run: \|ratio − 1\| ≤ 1e-4 (dimensionless, about 1e-4 nats of per-element log-prob drift) for at least 99% of (sample, SDE step) entries. 1e-4 is the recipe's own PPO clip window (`diffusion_loss.clip_ratio`): drift that large moves the ratio as far as one policy update is allowed to. | [bench/drift.md](bench/drift.md) |
 | One optimisation | Chosen from the profile, not before it. Measured with the profiler, gated by the numerics check. | [bench/before_after.md](bench/before_after.md) |
 
