@@ -40,7 +40,9 @@ Recordings land in `runs/mixgrpo/`: one `phases_<pid>.jsonl` per process, and on
 
 ## Results
 
-No results yet. The pipeline has run end to end on tiny random-weight models to check the recording; those runs say nothing about Qwen-Image and are not reported. Every real run reports, in `bench/`:
+One result so far, on Qwen-Image: batch invariance. The sampler's log-probs for the same trajectories differ by at most 1.19e-07 per element between batch size 1 and 16 (1x H100, step mode; details in [bench/drift.md](bench/drift.md)). That is one float32 rounding step, far under the 1e-4 drift threshold. The profile and the rollout-vs-trainer drift need the 4x H100 run, which has not happened yet.
+
+Every real run reports, in `bench/`:
 
 - rollout share of step time, and rollout and step time before and after the optimisation
 - log-prob drift between BF16 rollout and BF16 trainer, as mean and max per-element absolute difference
@@ -74,7 +76,7 @@ Listing something here means roadmap, not working code.
 
 ## Status and limitations
 
-Early proof of concept, single author. So far it has run end to end on one NVIDIA A10 (Lambda Cloud) with tiny random-weight Qwen-Image and Qwen3-VL models and verl-omni at `f50117e`: enough to check the recording, not to measure anything. The first real run, Qwen-Image OCR LoRA on 4x H100, has not happened yet. Untested: any other model, framework or GPU, full-parameter training, multi-node. The optimisation is one change and may not transfer.
+Early proof of concept, single author. So far it has run end to end on one NVIDIA A10 (Lambda Cloud) with tiny random-weight Qwen-Image and Qwen3-VL models and verl-omni at `f50117e`: enough to check the recording, not to measure anything. The batch-invariance check has run on real Qwen-Image on 1x H100. The full training run, Qwen-Image OCR LoRA on 4x H100, has not happened yet. Untested: any other model, framework or GPU, full-parameter training, multi-node. The optimisation is one change and may not transfer.
 
 ## Why build this
 
