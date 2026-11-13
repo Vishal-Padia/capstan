@@ -57,6 +57,48 @@ def test_rollout_split_into_encode_steps_and_decode(tmp_path, monkeypatch):
     ]
 
 
+def test_step_mode_records_batched_steps_at_decode(tmp_path, monkeypatch):
+    monkeypatch.setenv("CAPSTAN_OUT", str(tmp_path))
+
+    class Event(_FakeEvent):
+        def __init__(self, enable_timing):
+            self.t = 0
+
+        def record(self):
+            pass
+
+    monkeypatch.setitem(sys.modules, "torch", types.SimpleNamespace(cuda=types.SimpleNamespace(Event=Event)))
+
+    class Pipeline:
+        def forward(self):
+            pass
+
+        def diffuse(self):
+            pass
+
+        def prepare_encode(self, state):
+            return state
+
+        def denoise_step(self, batch, states=None):
+            return batch
+
+        def post_decode(self, state):
+            return "image"
+
+    vllm_omni._patch_pipeline(types.SimpleNamespace(QwenImagePipelineWithLogProb=Pipeline))
+    pipe = Pipeline()
+    ode = types.SimpleNamespace(step_index=0, sde_window=(1, 3))
+    sde = types.SimpleNamespace(step_index=1, sde_window=(1, 3))
+    pipe.prepare_encode(ode)
+    pipe.denoise_step("batch", states=[ode, ode])
+    pipe.denoise_step("batch", states=[ode, sde])
+    assert not (tmp_path / f"phases_{os.getpid()}.jsonl").exists()
+    assert pipe.post_decode(ode) == "image"
+
+    rows = [json.loads(line) for line in (tmp_path / f"phases_{os.getpid()}.jsonl").read_text().splitlines()]
+    assert [r["phase"] for r in rows] == ["rollout/encode", "rollout/ode_step", "rollout/sde_step", "rollout/decode"]
+
+
 def test_missing_pipeline_records_nothing_and_says_why(caplog):
     vllm_omni._patch_pipeline(types.SimpleNamespace())
     assert "rollout split not recorded" in caplog.text
