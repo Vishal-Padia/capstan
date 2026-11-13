@@ -80,6 +80,45 @@ def _step(original):
     return step
 
 
+# Step mode (step_execution=True) never calls forward: the engine calls these per request, and denoise_step once per
+# batch. Events wait for post_decode, which copies to the CPU and so has already synchronised.
+_pending = []
+
+
+def _in_sde_window(state):
+    start, end = state.sde_window
+    return start <= state.step_index < end
+
+
+def _timed(part):
+    def make(original):
+        def method(self, *args, **kwargs):
+            if _marks is not None:
+                return original(self, *args, **kwargs)
+            import torch
+
+            label = part
+            if part == "step":
+                states = kwargs.get("states") or ()
+                label = "sde_step" if any(_in_sde_window(s) for s in states) else "ode_step"
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record()
+            result = original(self, *args, **kwargs)
+            end.record()
+            _pending.append((label, start, end))
+            if part == "decode":
+                end.synchronize()
+                for name, a, b in _pending:
+                    capstan.record_phase(f"rollout/{name}", a.elapsed_time(b) / 1000)
+                _pending.clear()
+            return result
+
+        return method
+
+    return make
+
+
 def _patch_pipeline(package):
     pipeline = getattr(package, PIPELINE_CLASS, None)
     if pipeline is None or not hasattr(pipeline, "diffuse"):
@@ -89,6 +128,10 @@ def _patch_pipeline(package):
         return
     wrap(pipeline, "forward", _forward)
     wrap(pipeline, "diffuse", _diffuse)
+    # The scheduler update between batched forwards is not timed in step mode; it is elementwise and small.
+    for name, part in [("prepare_encode", "encode"), ("denoise_step", "step"), ("post_decode", "decode")]:
+        if hasattr(pipeline, name):
+            wrap(pipeline, name, _timed(part))
 
 
 # vLLM general plugin: vllm-omni loads it in every engine process, including the diffusion worker.
