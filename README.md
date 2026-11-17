@@ -38,6 +38,17 @@ bash /path/to/capstan/bench/run_mixgrpo.sh
 
 Recordings land in `runs/mixgrpo/`: one `phases_<pid>.jsonl` per process, and one `logprobs_step<step>_pid<pid>.npz` per training step.
 
+Or run it on [Modal](https://modal.com) without installing anything locally. [`bench/modal_app.py`](bench/modal_app.py) builds the same environment (verl-omni `81f3b65`, vllm 0.33) and keeps models, data and runs on a Modal volume named `capstan-models`:
+
+```bash
+modal run bench/modal_app.py::stage                     # download Qwen-Image, Qwen3-VL-8B, build the OCR dataset
+modal run bench/modal_app.py::dry                       # tiny random-weight models on one A10G; checks recording only
+modal run bench/modal_app.py::batch_invariance          # real Qwen-Image on one H100, batch 1 vs 16
+modal run bench/modal_app.py::mixgrpo --name baseline   # the recipe on 4x H100; report saved to runs/baseline
+```
+
+`--step-mode` on `dry` and `mixgrpo` turns on batched rollout (`step_execution=True`, `max_num_seqs=16`).
+
 ## Results
 
 One result so far, on Qwen-Image: batch invariance. The sampler's log-probs for the same trajectories differ by at most 1.19e-07 per element between batch size 1 and 16 (1x H100, step mode; details in [bench/drift.md](bench/drift.md)). That is one float32 rounding step, far under the 1e-4 drift threshold. The profile and the rollout-vs-trainer drift need the 4x H100 run, which has not happened yet.
