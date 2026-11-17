@@ -10,7 +10,7 @@ logger = logging.getLogger("capstan")
 # the MixGRPO pipeline call into it. The scheduler is found on the pipeline instance, not by import path.
 PIPELINE_PACKAGE = "verl_omni.pipelines.qwen_image_flow_grpo"
 PIPELINE_CLASS = "QwenImagePipelineWithLogProb"
-TESTED_WITH = "verl-omni f50117e"
+TESTED_WITH = "verl-omni 81f3b65"
 
 # (label, CUDA event) pairs for the request this process is generating; None outside a request.
 _marks = None
