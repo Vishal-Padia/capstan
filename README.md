@@ -26,7 +26,7 @@ Baseline it builds on: verl-omni, Flow-GRPO / MixGRPO, Qwen-Image, OCR LoRA reci
 
 Run it. The steps are manual because installing verl-omni and downloading the models depend on the machine.
 
-1. Install verl-omni at commit `f50117e` with its [installation guide](https://github.com/verl-project/verl-omni/blob/main/docs/start/install.md), plus `uv pip install -e ".[ocr]"`, and build the OCR dataset into `$WORKSPACE/data/ocr/qwen_image/` with its `examples/flowgrpo_trainer/data_process/qwenimage_ocr.py`.
+1. Install verl-omni at commit `81f3b65` with its [installation guide](https://github.com/verl-project/verl-omni/blob/main/docs/start/install.md), plus `uv pip install -e ".[ocr]"`, and build the OCR dataset into `$WORKSPACE/data/ocr/qwen_image/` with its `examples/flowgrpo_trainer/data_process/qwenimage_ocr.py`.
 2. Install Capstan into the same environment: `uv pip install -e .`
 3. From the verl-omni repo root, run the MixGRPO recipe through Capstan. [`bench/run_mixgrpo.sh`](bench/run_mixgrpo.sh) is verl-omni's `examples/mixgrpo_trainer/qwen_image/run_qwen_image_ocr_lora_mixgrpo.sh` with three changes: it runs through `capstan run`, turns on sampler log-probs (`calculate_log_probs=True`) so the drift check has both sides, and stops after 12 steps with no checkpoints, validation or W&B.
 
