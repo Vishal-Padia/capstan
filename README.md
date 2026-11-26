@@ -56,6 +56,7 @@ First results, on Qwen-Image OCR LoRA with MixGRPO, verl-omni `81f3b65`:
 
 - **Profile** (4x H100, stock recipe, request mode): rollout is 58% of a 758 s training step, then update 20%, reward 14%, recompute 5%, weight sync 3%. Inside rollout, transformer forwards are 97% of GPU time; text encoding and VAE decode are under 3% together. Details in [bench/profile.md](bench/profile.md).
 - **Rollout vs trainer drift** (same run): **fails** the threshold. 7.2% of (sample, SDE step) entries have |ratio − 1| > 1e-4 against the 1% allowed. Drift grows as denoising proceeds: negligible at the high-noise steps, past the recipe's own PPO clip for 44% of samples at t = 673. This is the stock recipe before any optimisation. Details in [bench/drift.md](bench/drift.md).
+- **Batched rollout, the first optimisation** (4x H100, request mode vs step mode with `max_num_seqs=16`, both in one container on one host): rollout 295 → 104 s per step (**2.83x**), the whole step 533 → 345 s (**1.54x**). Drift is unchanged: both fail the threshold by the same amount, timestep by timestep, so batching adds no drift of its own. Hosts behind the same GPU type differ (the identical request-mode recipe ran at 758 s/step on another host), so before/after runs share one container. Details in [bench/before_after.md](bench/before_after.md).
 - **Batch invariance** (1x H100, step mode): the sampler's log-probs for the same trajectories differ by at most 1.19e-07 per element between batch size 1 and 16, one float32 rounding step.
 
 Every real run reports, in `bench/`:
@@ -92,7 +93,7 @@ Listing something here means roadmap, not working code.
 
 ## Status and limitations
 
-Early proof of concept, single author. It has run end to end on real Qwen-Image OCR LoRA training on 4x H100 (Modal, verl-omni `81f3b65`, 5 steps) for the profile and drift above, on 1x H100 for batch invariance, and on tiny random-weight models on one A10 or A10G to check the recording. Untested: any other model, framework or GPU, full-parameter training, multi-node, and runs longer than 5 steps. No optimisation has been measured yet. The optimisation is one change and may not transfer.
+Early proof of concept, single author. It has run end to end on real Qwen-Image OCR LoRA training on 4x H100 (Modal, verl-omni `81f3b65`, 5 steps) for the profile and drift above, on 1x H100 for batch invariance, and on tiny random-weight models on one A10 or A10G to check the recording. Untested: any other model, framework or GPU, full-parameter training, multi-node, and runs longer than 5 steps. One optimisation has been measured, batched rollout, on one host pair; it may not transfer to other recipes or hardware.
 
 ## Why build this
 
