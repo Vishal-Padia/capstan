@@ -41,13 +41,13 @@ Recordings land in `runs/mixgrpo/`: one `phases_<pid>.jsonl` per process, and on
 Or run it on [Modal](https://modal.com) without installing anything locally. [`bench/modal_app.py`](bench/modal_app.py) builds the same environment (verl-omni `81f3b65`, vllm 0.33) and keeps models, data and runs on a Modal volume named `capstan-models`:
 
 ```bash
-modal run bench/modal_app.py::stage                     # download Qwen-Image, Qwen3-VL-8B, build the OCR dataset
-modal run bench/modal_app.py::dry                       # tiny random-weight models on one A10G; checks recording only
-modal run bench/modal_app.py::batch_invariance          # real Qwen-Image on one H100, batch 1 vs 16
-modal run bench/modal_app.py::mixgrpo --name baseline   # the recipe on 4x H100; report saved to runs/baseline
+modal run bench/modal_app.py::stage                                  # download Qwen-Image, Qwen3-VL-8B, build the OCR dataset
+modal run bench/modal_app.py::run --job dry                          # tiny random-weight models on one A10G; checks recording only
+modal run bench/modal_app.py::run --job batch-invariance             # real Qwen-Image on one H100, batch 1 vs 16
+modal run bench/modal_app.py::run --job mixgrpo --name baseline      # the recipe on 4x H100
 ```
 
-`--step-mode` on `dry` and `mixgrpo` turns on batched rollout (`step_execution=True`, `max_num_seqs=16`).
+Each run is saved under `runs/<name>` on the volume and downloaded to `logs/<name>/` (full log, timings, log-probs, reports) when it finishes; `--name` defaults to the job and a timestamp. For a run started with `--detach`, `modal run bench/modal_app.py::fetch --name <name>` downloads it afterwards. `--step-mode` on `dry` and `mixgrpo` turns on batched rollout (`step_execution=True`, `max_num_seqs=16`).
 
 ## Results
 
