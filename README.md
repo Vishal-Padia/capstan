@@ -100,6 +100,8 @@ RL post-training for image, video and audio models runs on hand-rolled sampling 
 
 ## Credits
 
+A huge thank you to [Modal](https://modal.com) for giving us a generous amount of credits to experiment and build Capstan.
+
 Built on [verl-omni](https://github.com/verl-project/verl-omni) and [vllm-omni](https://github.com/vllm-project/vllm-omni). Algorithms: [Flow-GRPO](https://arxiv.org/abs/2505.05470) and [MixGRPO](https://arxiv.org/abs/2507.21802). Two pieces of the numerics check are borrowed from the vLLM team's train-inference consistency work ([Nov 2025](https://vllm.ai/blog/2025-11-10-bitwise-consistent-train-inference), [Oct 2026](https://vllm.ai/blog/2026-10-14-train-inference-consistency)): the batch-invariance check, and reporting the rollout-vs-trainer log-prob difference directly. Their work makes the two bitwise identical; Capstan only measures how far apart they are.
 
 ## License
