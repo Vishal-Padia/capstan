@@ -45,9 +45,10 @@ modal run bench/modal_app.py::stage                                  # download 
 modal run bench/modal_app.py::run --job dry                          # tiny random-weight models on one A10G; checks recording only
 modal run bench/modal_app.py::run --job batch-invariance             # real Qwen-Image on one H100, batch 1 vs 16
 modal run bench/modal_app.py::run --job mixgrpo --name baseline      # the recipe on 4x H100
+modal run bench/modal_app.py::run --job mixgrpo-pair --name paired  # request then step mode, same 4x H100 host
 ```
 
-Each run is saved under `runs/<name>` on the volume and downloaded to `logs/<name>/` (full log, timings, log-probs, reports) when it finishes; `--name` defaults to the job and a timestamp. For a run started with `--detach`, `modal run bench/modal_app.py::fetch --name <name>` downloads it afterwards. `--step-mode` on `dry` and `mixgrpo` turns on batched rollout (`step_execution=True`, `max_num_seqs=16`).
+Each run is saved under `runs/<name>` on the volume and downloaded to `logs/<name>/` (full log, timings, log-probs, reports) when it finishes; `--name` defaults to the job and a timestamp. Every run also saves `host.txt` (GPUs, driver, clocks, CPU), since hosts behind the same GPU type differ, and a before/after is only fair on one host. For a run started with `--detach`, `modal run bench/modal_app.py::fetch --name <name>` downloads it afterwards. `--step-mode` on `dry` and `mixgrpo` turns on batched rollout (`step_execution=True`, `max_num_seqs=16`).
 
 ## Results
 
