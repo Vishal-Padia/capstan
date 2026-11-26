@@ -33,6 +33,18 @@ The SDE window moves each step (`sample_strategy=random`, seeded per step), and 
 - This is request mode on a verl-omni commit that includes the step-mode timestep fix, so it is the plain mismatch between vllm-omni's rollout kernels and the diffusers trainer, not that bug. verl-omni's own measurements in [#280](https://github.com/verl-project/verl-omni/issues/280) found the same timestep dependence.
 
 
+## Batched rollout vs request mode, one host
+
+The paired run in [before_after.md](before_after.md): request mode then step mode (`max_num_seqs=16`) in one 4x H100 container, verl-omni `81f3b65`. **Both fail**: request 321 of 5120 entries over, step mode 304 of 5120. Batching leaves the drift where it was, timestep by timestep:
+
+| Timestep t | Request: over | Request: signed mean | Step mode: over | Step mode: signed mean |
+| --- | --- | --- | --- | --- |
+| 1000 | 0 of 1024 | −1.1e-6 | 0 of 1024 | −1.1e-6 |
+| 928.97 | 0 of 1024 | −6.9e-6 | 0 of 1024 | −6.5e-6 |
+| 851.48 | 1 of 1024 | −1.7e-5 | 4 of 1024 | −1.6e-5 |
+| 766.62 | 124 of 1536 | −4.5e-5 | 116 of 1536 | −4.5e-5 |
+| 673.28 | 196 of 512 | −8.6e-5 | 184 of 512 | −8.5e-5 |
+
 ## Batch invariance
 
 Sampler log-probs for the same 16 trajectories (one prompt, fixed per-sample seeds), generated with the engine allowed to batch 1 and then 16 requests. Qwen-Image, 1x H100 80 GB (Modal, driver 610), verl-omni `f50117e`, the MixGRPO recipe's rollout settings in step mode, run with [`batch_invariance.py`](batch_invariance.py). Step mode is required: in request mode, the recipe's default, the engine runs at `max_num_seqs=1` whatever is asked.
