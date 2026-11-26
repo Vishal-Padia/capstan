@@ -59,16 +59,26 @@ TINY = [
 STEP_MODE = ["actor_rollout_ref.rollout.step_execution=True", "actor_rollout_ref.rollout.max_num_seqs=16"]
 
 
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
 def log(msg):
     print(f"[capstan {time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-# Prints only progress lines, so the Modal dashboard shows where a run is without the full training log.
-def stream(cmd, on_step=None, **kwargs):
+# Writes the full output to log_path and prints only progress lines, plus a heartbeat with the latest output every
+# two minutes, so the Modal dashboard shows where a run is without the full training log.
+def stream(cmd, log_path, on_step=None, **kwargs):
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, **kwargs)
-    tail = []
+    Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+    full = open(log_path, "a", buffering=1)
+    tail, beat = [], time.time()
     for line in proc.stdout:
+        full.write(line)
         tail = (tail + [line])[-200:]
+        if line.strip() and time.time() - beat > 120:
+            log("running; latest: " + ANSI.sub("", line).strip()[:200])
+            beat = time.time()
         if m := re.search(r"\bstep:(\d+) - ", line):
             t = re.search(r"timing_s/step:([\d.]+)", line)
             log(f"training step {m[1]} done" + (f" in {float(t[1]):.0f}s" if t else ""))
@@ -76,6 +86,7 @@ def stream(cmd, on_step=None, **kwargs):
                 on_step()
         elif "Traceback" in line or "Error" in line.split(":")[0] or "rollout split not recorded" in line:
             log(line.rstrip()[:300])
+    full.close()
     if proc.wait():
         print("".join(tail), flush=True)
         raise RuntimeError(f"{cmd[0]} exited with {proc.returncode}")
@@ -83,7 +94,7 @@ def stream(cmd, on_step=None, **kwargs):
 
 def run_recipe(out, env, overrides, on_step=None):
     cmd = ["bash", "/capstan/bench/run_mixgrpo.sh", *overrides]
-    stream(cmd, on_step=on_step, cwd="/verl-omni", env={**os.environ, "OUT": out, **env})
+    stream(cmd, f"{out}/train.log", on_step=on_step, cwd="/verl-omni", env={**os.environ, "OUT": out, **env})
     log("training finished; writing report")
     subprocess.run(["capstan", "report", out, "--skip", env.get("SKIP", "2")], check=True)
     report = (Path(out) / "profile.md").read_text() + "\n" + (Path(out) / "drift.md").read_text()
@@ -111,7 +122,7 @@ def stage():
 
 
 @app.function(gpu="A10G", volumes={"/vol": volume}, timeout=2400)
-def dry(step_mode: bool = False):
+def dry(name: str, step_mode: bool = False):
     log(f"tiny MixGRPO dry run, {'step' if step_mode else 'request'} mode, 3 steps")
     env = {
         "WORKSPACE": "/vol",
@@ -122,15 +133,18 @@ def dry(step_mode: bool = False):
         "MODEL": "/models/tiny-random/Qwen-Image",
         "REWARD_MODEL": "/models/tiny-random/qwen3-vl",
     }
-    return run_recipe("/tmp/runs/tiny", env, TINY + (STEP_MODE if step_mode else []))
+    try:
+        return run_recipe(f"/vol/runs/{name}", env, TINY + (STEP_MODE if step_mode else []))
+    finally:
+        volume.commit()
 
 
 @app.function(gpu="H100", volumes={"/vol": volume}, timeout=3600)
-def batch_invariance(a: int = 1, b: int = 16):
+def batch_invariance(name: str, a: int = 1, b: int = 16):
     outs = []
     for batch in (a, b):
         log(f"generating at batch {batch}")
-        out = f"/tmp/batch{batch}.npz"
+        out = f"/vol/runs/{name}/batch{batch}.npz"
         stream(
             [
                 "python",
@@ -143,6 +157,7 @@ def batch_invariance(a: int = 1, b: int = 16):
                 "--out",
                 out,
             ],
+            f"/vol/runs/{name}/batch{batch}.log",
             cwd="/verl-omni",
         )
         outs.append(out)
@@ -150,6 +165,8 @@ def batch_invariance(a: int = 1, b: int = 16):
         ["python", "/capstan/bench/batch_invariance.py", "compare", *outs], check=True, capture_output=True, text=True
     ).stdout
     print(table, flush=True)
+    Path(f"/vol/runs/{name}/batch_invariance.md").write_text(table)
+    volume.commit()
     return table
 
 
@@ -168,3 +185,37 @@ def mixgrpo(name: str, steps: int = 5, step_mode: bool = False):
         return run_recipe(out, env, STEP_MODE if step_mode else [], on_step=volume.commit)
     finally:
         volume.commit()
+
+
+def download(name):
+    dest = REPO / "logs" / name
+    for entry in volume.listdir(f"runs/{name}", recursive=True):
+        if entry.type != modal.volume.FileEntryType.FILE:
+            continue
+        path = dest / Path(entry.path).relative_to(f"runs/{name}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            for chunk in volume.read_file(entry.path):
+                f.write(chunk)
+    print(f"saved {dest}")
+
+
+# Runs a job and saves everything it recorded (full log, timings, log-probs, reports) to logs/<name>/ locally.
+@app.local_entrypoint()
+def run(job: str, name: str = "", steps: int = 5, step_mode: bool = False):
+    name = name or f"{job}-{time.strftime('%Y%m%d-%H%M%S')}"
+    jobs = {
+        "dry": lambda: dry.remote(name, step_mode),
+        "batch-invariance": lambda: batch_invariance.remote(name),
+        "mixgrpo": lambda: mixgrpo.remote(name, steps, step_mode),
+    }
+    try:
+        jobs[job]()
+    finally:
+        download(name)
+
+
+# For runs started with --detach, or whose local client went away before the download.
+@app.local_entrypoint()
+def fetch(name: str):
+    download(name)
