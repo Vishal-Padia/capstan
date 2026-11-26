@@ -92,6 +92,18 @@ def stream(cmd, log_path, on_step=None, **kwargs):
         raise RuntimeError(f"{cmd[0]} exited with {proc.returncode}")
 
 
+# Hosts behind the same Modal GPU type differ (CPU, PCIe, clocks), and the offload-heavy phases feel it.
+def record_host(out):
+    query = "name,driver_version,clocks.max.sm,clocks.sm,memory.total,pcie.link.gen.current,pcie.link.width.current"
+    sh = lambda cmd: subprocess.run(["bash", "-c", cmd], capture_output=True, text=True).stdout  # noqa: E731
+    gpus = sh(f"nvidia-smi --query-gpu={query} --format=csv")
+    cpu = sh("lscpu | grep 'Model name' | sed 's/Model name: *//'").strip()
+    Path(out).mkdir(parents=True, exist_ok=True)
+    (Path(out) / "host.txt").write_text(f"{gpus}\ncpu: {cpu}\nlogical cpus: {os.cpu_count()}\n{sh('free -g')}")
+    first = gpus.splitlines()[1] if len(gpus.splitlines()) > 1 else gpus.strip()
+    log(f"host: {len(gpus.splitlines()) - 1} x [{first}], cpu {cpu}")
+
+
 def run_recipe(out, env, overrides, on_step=None):
     cmd = ["bash", "/capstan/bench/run_mixgrpo.sh", *overrides]
     stream(cmd, f"{out}/train.log", on_step=on_step, cwd="/verl-omni", env={**os.environ, "OUT": out, **env})
@@ -133,6 +145,7 @@ def dry(name: str, step_mode: bool = False):
         "MODEL": "/models/tiny-random/Qwen-Image",
         "REWARD_MODEL": "/models/tiny-random/qwen3-vl",
     }
+    record_host(f"/vol/runs/{name}")
     try:
         return run_recipe(f"/vol/runs/{name}", env, TINY + (STEP_MODE if step_mode else []))
     finally:
@@ -141,6 +154,7 @@ def dry(name: str, step_mode: bool = False):
 
 @app.function(gpu="H100", volumes={"/vol": volume}, timeout=3600)
 def batch_invariance(name: str, a: int = 1, b: int = 16):
+    record_host(f"/vol/runs/{name}")
     outs = []
     for batch in (a, b):
         log(f"generating at batch {batch}")
@@ -170,9 +184,7 @@ def batch_invariance(name: str, a: int = 1, b: int = 16):
     return table
 
 
-@app.function(gpu="H100:4", memory=262144, volumes={"/vol": volume}, timeout=3 * 3600)
-def mixgrpo(name: str, steps: int = 5, step_mode: bool = False):
-    out = f"/vol/runs/{name}"
+def qwen_image(out, steps, step_mode):
     log(f"Qwen-Image MixGRPO on 4x H100, {steps} steps, {'step' if step_mode else 'request'} mode -> {out}")
     env = {
         "WORKSPACE": "/vol",
@@ -185,6 +197,24 @@ def mixgrpo(name: str, steps: int = 5, step_mode: bool = False):
         return run_recipe(out, env, STEP_MODE if step_mode else [], on_step=volume.commit)
     finally:
         volume.commit()
+
+
+@app.function(gpu="H100:4", memory=262144, volumes={"/vol": volume}, timeout=3 * 3600)
+def mixgrpo(name: str, steps: int = 5, step_mode: bool = False):
+    record_host(f"/vol/runs/{name}")
+    return qwen_image(f"/vol/runs/{name}", steps, step_mode)
+
+
+# Request mode then step mode in one container, so a before/after shares one host: separate containers can land on
+# hosts whose offload-heavy phases differ by tens of percent.
+@app.function(gpu="H100:4", memory=262144, volumes={"/vol": volume}, timeout=4 * 3600)
+def mixgrpo_pair(name: str, steps: int = 5):
+    record_host(f"/vol/runs/{name}")
+    reports = []
+    for mode, step_mode in (("request", False), ("step", True)):
+        reports.append(qwen_image(f"/vol/runs/{name}/{mode}", steps, step_mode))
+        subprocess.run(["ray", "stop", "--force"], capture_output=True)
+    return "\n".join(reports)
 
 
 def download(name):
@@ -208,6 +238,7 @@ def run(job: str, name: str = "", steps: int = 5, step_mode: bool = False):
         "dry": lambda: dry.remote(name, step_mode),
         "batch-invariance": lambda: batch_invariance.remote(name),
         "mixgrpo": lambda: mixgrpo.remote(name, steps, step_mode),
+        "mixgrpo-pair": lambda: mixgrpo_pair.remote(name, steps),
     }
     try:
         jobs[job]()
