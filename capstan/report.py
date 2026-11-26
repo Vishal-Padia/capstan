@@ -91,7 +91,29 @@ def drift(run):
             ["Step", "Entries", "Mean abs drift", "Max abs drift", "Ratio p50", "Ratio p99", "Over threshold"], rows
         ),
     ]
+    arrays = [a for step in sorted(by_step) for a in by_step[step]]
+    if all("timesteps" in a for a in arrays):
+        out.append("\n## By SDE timestep\n")
+        out.append("Entries split by the SDE timestep they were sampled at; signed mean is trainer minus rollout.\n")
+        out.append(
+            _table(
+                ["Timestep", "Entries", "Mean drift (signed)", "Max abs drift", "Over threshold"], _by_timestep(arrays)
+            )
+        )
     return "\n".join(out) + "\n"
+
+
+def _by_timestep(arrays):
+    rollout = np.concatenate([a["rollout"] for a in arrays]).ravel()
+    trainer = np.concatenate([a["trainer"] for a in arrays]).ravel()
+    timesteps = np.round(np.concatenate([a["timesteps"] for a in arrays]).ravel().astype(np.float64), 2)
+    rows = []
+    for t in sorted(set(timesteps.tolist()), reverse=True):
+        mask = timesteps == t
+        s = drift_stats(rollout[mask], trainer[mask])
+        signed = float(np.mean(trainer[mask].astype(np.float64) - rollout[mask]))
+        rows.append([f"{t:g}", s["n"], f"{signed:.2g}", f"{s['max_abs']:.3g}", s["over_tol"]])
+    return rows
 
 
 def write(run, out, skip):

@@ -36,3 +36,18 @@ def test_profile_and_drift_tables(tmp_path):
     drift = report.drift(tmp_path)
     assert "This run failed: 4 of 8 entries over." in drift
     assert "| all | 8 |" in drift
+
+
+def test_drift_split_by_timestep(tmp_path):
+    timesteps = np.array([[1000.0, 928.97], [1000.0, 928.97]])
+    trainer = np.array([[0.0, -2e-4], [0.0, -2e-4]])
+    np.savez(tmp_path / "logprobs_step000001_pid1.npz", rollout=np.zeros((2, 2)), trainer=trainer, timesteps=timesteps)
+
+    drift = report.drift(tmp_path)
+    assert "| 1000 | 2 | 0 | 0 | 0 |" in drift
+    assert "| 928.97 | 2 | -0.0002 | 0.0002 | 2 |" in drift
+
+
+def test_drift_without_timesteps_has_no_split(tmp_path):
+    np.savez(tmp_path / "logprobs_step000001_pid1.npz", rollout=np.zeros((2, 2)), trainer=np.zeros((2, 2)))
+    assert "By SDE timestep" not in report.drift(tmp_path)
