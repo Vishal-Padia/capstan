@@ -64,7 +64,7 @@ def log(msg):
 
 
 # Prints only progress lines, so the Modal dashboard shows where a run is without the full training log.
-def stream(cmd, **kwargs):
+def stream(cmd, on_step=None, **kwargs):
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, **kwargs)
     tail = []
     for line in proc.stdout:
@@ -72,6 +72,8 @@ def stream(cmd, **kwargs):
         if m := re.search(r"\bstep:(\d+) - ", line):
             t = re.search(r"timing_s/step:([\d.]+)", line)
             log(f"training step {m[1]} done" + (f" in {float(t[1]):.0f}s" if t else ""))
+            if on_step:
+                on_step()
         elif "Traceback" in line or "Error" in line.split(":")[0] or "rollout split not recorded" in line:
             log(line.rstrip()[:300])
     if proc.wait():
@@ -79,10 +81,9 @@ def stream(cmd, **kwargs):
         raise RuntimeError(f"{cmd[0]} exited with {proc.returncode}")
 
 
-def run_recipe(out, env, overrides):
-    stream(
-        ["bash", "/capstan/bench/run_mixgrpo.sh", *overrides], cwd="/verl-omni", env={**os.environ, "OUT": out, **env}
-    )
+def run_recipe(out, env, overrides, on_step=None):
+    cmd = ["bash", "/capstan/bench/run_mixgrpo.sh", *overrides]
+    stream(cmd, on_step=on_step, cwd="/verl-omni", env={**os.environ, "OUT": out, **env})
     log("training finished; writing report")
     subprocess.run(["capstan", "report", out, "--skip", env.get("SKIP", "2")], check=True)
     report = (Path(out) / "profile.md").read_text() + "\n" + (Path(out) / "drift.md").read_text()
@@ -163,6 +164,7 @@ def mixgrpo(name: str, steps: int = 5, step_mode: bool = False):
         "REWARD_MODEL": "/vol/Qwen3-VL-8B-Instruct",
     }
     try:
-        return run_recipe(out, env, STEP_MODE if step_mode else [])
+        # Committing after every step means a timeout or crash still leaves the finished steps on the volume.
+        return run_recipe(out, env, STEP_MODE if step_mode else [], on_step=volume.commit)
     finally:
         volume.commit()
