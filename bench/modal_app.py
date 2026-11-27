@@ -25,7 +25,7 @@ image = (
         REPO,
         "/capstan",
         copy=True,
-        ignore=[".venv", ".git", "**/__pycache__", "runs", "capstan.md", "plan.md", "drafts"],
+        ignore=[".venv", ".git", "**/__pycache__", "runs", "capstan.md", "plan.md", "drafts", "logs", "checkpoints.md"],
     )
     .run_commands("uv pip install --system -e /capstan")
 )
@@ -184,6 +184,51 @@ def batch_invariance(name: str, a: int = 1, b: int = 16):
     return table
 
 
+ROLLOUT_CONFIGS = {
+    "stock": [],
+    "eager": ["actor_rollout_ref.rollout.enforce_eager=True"],
+    # Eager + bf16 + SDPA turns on vllm-omni's Qwen-Image reference_precision path: diffusers' RMSNorm, AdaLN,
+    # QK-norm and RoPE instead of the fused Triton/CUDA kernels.
+    "reference": [
+        "actor_rollout_ref.rollout.enforce_eager=True",
+        "actor_rollout_ref.rollout.rollout_attn_backend=TORCH_SDPA",
+    ],
+}
+TRAINER_BACKENDS = ["_flash_3_varlen_hub", "native"]
+
+
+# Each rollout config generates trajectories once; each trainer backend recomputes their log-probs. Outputs that
+# already exist are kept, so a rerun after a failure only redoes what is missing.
+@app.function(gpu="H100", volumes={"/vol": volume}, timeout=3 * 3600)
+def consistency(name: str):
+    out = Path(f"/vol/runs/{name}")
+    record_host(out)
+    script = ["python", "/capstan/bench/consistency.py"]
+    tables = []
+    for config, overrides in ROLLOUT_CONFIGS.items():
+        traj = out / f"{config}.pt"
+        if not traj.exists():
+            log(f"rollout: {config}")
+            cmd = [*script, "generate", "--model", "/vol/Qwen-Image", "--out", str(traj), *overrides]
+            stream(cmd, out / f"{config}_rollout.log", cwd="/verl-omni")
+            subprocess.run(["ray", "stop", "--force"], capture_output=True)
+            volume.commit()
+        for backend in TRAINER_BACKENDS:
+            result = out / f"{config}__{backend.strip('_')}.npz"
+            if not result.exists():
+                log(f"trainer recompute: {config} trajectories, {backend}")
+                cmd = [*script, "recompute", "--model", "/vol/Qwen-Image", "--traj", str(traj)]
+                cmd += ["--attn-backend", backend, "--out", str(result)]
+                stream(cmd, out / f"{result.stem}.log", cwd="/verl-omni")
+                volume.commit()
+            tables.append(str(result))
+    table = subprocess.run([*script, "table", *tables], check=True, capture_output=True, text=True).stdout
+    print(table, flush=True)
+    (out / "consistency.md").write_text(table)
+    volume.commit()
+    return table
+
+
 def qwen_image(out, steps, step_mode):
     log(f"Qwen-Image MixGRPO on 4x H100, {steps} steps, {'step' if step_mode else 'request'} mode -> {out}")
     env = {
@@ -239,6 +284,7 @@ def run(job: str, name: str = "", steps: int = 5, step_mode: bool = False):
         "batch-invariance": lambda: batch_invariance.remote(name),
         "mixgrpo": lambda: mixgrpo.remote(name, steps, step_mode),
         "mixgrpo-pair": lambda: mixgrpo_pair.remote(name, steps),
+        "consistency": lambda: consistency.remote(name),
     }
     try:
         jobs[job]()

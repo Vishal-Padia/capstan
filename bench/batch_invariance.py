@@ -42,7 +42,7 @@ RECIPE = [
 ]
 
 
-def generate(model, batch, overrides, out):
+def rollout(model, batch, overrides):
     import ray
     import verl_omni
     from hydra import compose, initialize_config_dir
@@ -87,6 +87,11 @@ def generate(model, batch, overrides, out):
         result = manager.generate_sequences(prompts=prompts)
     finally:
         ray.shutdown()
+    return result
+
+
+def generate(model, batch, overrides, out):
+    result = rollout(model, batch, overrides)
     np.savez(
         out,
         batch=batch,
