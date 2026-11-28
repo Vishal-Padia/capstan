@@ -229,8 +229,8 @@ def consistency(name: str):
     return table
 
 
-def qwen_image(out, steps, step_mode):
-    log(f"Qwen-Image MixGRPO on 4x H100, {steps} steps, {'step' if step_mode else 'request'} mode -> {out}")
+def qwen_image(out, steps, overrides):
+    log(f"Qwen-Image MixGRPO on 4x H100, {steps} steps, overrides {overrides} -> {out}")
     env = {
         "WORKSPACE": "/vol",
         "STEPS": str(steps),
@@ -239,7 +239,7 @@ def qwen_image(out, steps, step_mode):
     }
     try:
         # Committing after every step means a timeout or crash still leaves the finished steps on the volume.
-        return run_recipe(out, env, STEP_MODE if step_mode else [], on_step=volume.commit)
+        return run_recipe(out, env, overrides, on_step=volume.commit)
     finally:
         volume.commit()
 
@@ -247,17 +247,23 @@ def qwen_image(out, steps, step_mode):
 @app.function(gpu="H100:4", memory=262144, volumes={"/vol": volume}, timeout=3 * 3600)
 def mixgrpo(name: str, steps: int = 5, step_mode: bool = False):
     record_host(f"/vol/runs/{name}")
-    return qwen_image(f"/vol/runs/{name}", steps, step_mode)
+    return qwen_image(f"/vol/runs/{name}", steps, STEP_MODE if step_mode else [])
 
 
-# Request mode then step mode in one container, so a before/after shares one host: separate containers can land on
+PAIRS = {
+    "step": [("request", []), ("step", STEP_MODE)],
+    "eager": [("step", STEP_MODE), ("step-eager", [*STEP_MODE, "actor_rollout_ref.rollout.enforce_eager=True"])],
+}
+
+
+# Before then after in one container, so a before/after shares one host: separate containers can land on
 # hosts whose offload-heavy phases differ by tens of percent.
 @app.function(gpu="H100:4", memory=262144, volumes={"/vol": volume}, timeout=4 * 3600)
-def mixgrpo_pair(name: str, steps: int = 5):
+def mixgrpo_pair(name: str, steps: int = 5, second: str = "step"):
     record_host(f"/vol/runs/{name}")
     reports = []
-    for mode, step_mode in (("request", False), ("step", True)):
-        reports.append(qwen_image(f"/vol/runs/{name}/{mode}", steps, step_mode))
+    for mode, overrides in PAIRS[second]:
+        reports.append(qwen_image(f"/vol/runs/{name}/{mode}", steps, overrides))
         subprocess.run(["ray", "stop", "--force"], capture_output=True)
     return "\n".join(reports)
 
@@ -284,6 +290,7 @@ def run(job: str, name: str = "", steps: int = 5, step_mode: bool = False):
         "batch-invariance": lambda: batch_invariance.remote(name),
         "mixgrpo": lambda: mixgrpo.remote(name, steps, step_mode),
         "mixgrpo-pair": lambda: mixgrpo_pair.remote(name, steps),
+        "eager-pair": lambda: mixgrpo_pair.remote(name, steps, "eager"),
         "consistency": lambda: consistency.remote(name),
     }
     try:
