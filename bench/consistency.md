@@ -26,7 +26,7 @@ Mean signed per-element drift (trainer minus rollout), ± standard error over 16
 | reference × native | −1.2e-6 | −2.3e-6 | −1.1e-5 | −2.5e-5 | −4.9e-5 ± 1e-5 |
 
 - **It reproduces at step 0 on one GPU.** Stock gives −8.7e-5 at t = 673; the 4x H100 training run gave −8.6e-5 ([before_after.md](before_after.md)). The drift comes from the two transformer implementations, not from LoRA, FSDP or training.
-- **torch.compile on the rollout side is about 40% of it** (−8.7e-5 → −5.5e-5). Turning it off costs rollout speed, so it isn't a fix until it's timed.
+- **torch.compile on the rollout side is about 40% of it** (−8.7e-5 → −5.5e-5). Turning it off costs no measurable rollout speed on 4x H100 and cuts entries over the threshold from 6.6% to 2.05% ([before_after.md](before_after.md)), which still fails.
 - **The trainer's attention backend makes no measurable difference.**
 - **vllm-omni's reference mode leaves about half of it**, not distinguishable from plain eager at 16 samples.
 - **The growth with denoising comes from the scheduler.** For the recipe's SDE, a velocity mismatch Δv between the two sides gives a per-element drift of about −1.48 · |dt| · (1−σ)/(a²σ) · mean(Δv²), where a is the noise level (1.2). Dividing the stock drift by |dt|·(1−σ)/σ gives a roughly constant value from t = 929 to t = 673. So the model mismatch is about the same at every step, and the falling noise scale amplifies it. The drift is always negative because the mismatch enters squared.
