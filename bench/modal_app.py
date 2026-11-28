@@ -229,6 +229,50 @@ def consistency(name: str):
     return table
 
 
+BLOCK_DUMPS = {
+    "diff_fa3_pad": ["diffusers", "--backend", "_flash_3_varlen_hub"],
+    "diff_sdpa_pad": ["diffusers", "--backend", "native"],
+    "diff_sdpa_unpad": ["diffusers", "--backend", "native", "--unpadded"],
+    "vllm_fa3": ["vllm", "--backend", "FLASH_ATTN_3_HUB"],
+    "vllm_ref": ["vllm", "--backend", "TORCH_SDPA"],
+}
+# The first of each pair must be the side with unpadded text (the rollout's view), so text rows line up.
+BLOCK_PAIRS = [
+    ("vllm_fa3", "diff_fa3_pad"),
+    ("vllm_ref", "diff_sdpa_pad"),
+    ("vllm_ref", "diff_sdpa_unpad"),
+    ("diff_sdpa_unpad", "diff_sdpa_pad"),
+]
+
+
+# Per-block activations of both transformers on one stock trajectory from the consistency run. Each dump is a
+# separate process because the two 20B models don't fit on one H100 together. Dumps (about 1.5 GB each) go to a
+# scratch dir on the volume, outside runs/ so they aren't downloaded, and are reused if a later dump fails.
+@app.function(gpu="H100", volumes={"/vol": volume}, timeout=2 * 3600)
+def blocks(name: str, traj: str = "c4-consistency/stock.pt"):
+    out = Path(f"/vol/runs/{name}")
+    record_host(out)
+    script = ["python", "/capstan/bench/blocks.py"]
+    scratch = Path(f"/vol/scratch/{name}")
+    scratch.mkdir(parents=True, exist_ok=True)
+    for dump, args in BLOCK_DUMPS.items():
+        if (scratch / f"{dump}.pt").exists():
+            continue
+        log(f"dump: {dump}")
+        cmd = [*script, args[0], "--model", "/vol/Qwen-Image", "--traj", f"/vol/runs/{traj}"]
+        stream([*cmd, "--out", str(scratch / f"{dump}.pt"), *args[1:]], out / f"{dump}.log", cwd="/verl-omni")
+        volume.commit()
+    tables = []
+    for a, b in BLOCK_PAIRS:
+        cmd = [*script, "compare", str(scratch / f"{a}.pt"), str(scratch / f"{b}.pt")]
+        table = subprocess.run(cmd, check=True, stdout=subprocess.PIPE, text=True).stdout
+        (out / f"{a}__{b}.md").write_text(table)
+        tables.append(table)
+        print(table, flush=True)
+    volume.commit()
+    return "\n".join(tables)
+
+
 def qwen_image(out, steps, overrides):
     log(f"Qwen-Image MixGRPO on 4x H100, {steps} steps, overrides {overrides} -> {out}")
     env = {
@@ -292,6 +336,7 @@ def run(job: str, name: str = "", steps: int = 5, step_mode: bool = False):
         "mixgrpo-pair": lambda: mixgrpo_pair.remote(name, steps),
         "eager-pair": lambda: mixgrpo_pair.remote(name, steps, "eager"),
         "consistency": lambda: consistency.remote(name),
+        "blocks": lambda: blocks.remote(name),
     }
     try:
         jobs[job]()

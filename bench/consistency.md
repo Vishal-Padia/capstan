@@ -30,3 +30,33 @@ Mean signed per-element drift (trainer minus rollout), ± standard error over 16
 - **The trainer's attention backend makes no measurable difference.**
 - **vllm-omni's reference mode leaves about half of it**, not distinguishable from plain eager at 16 samples.
 - **The growth with denoising comes from the scheduler.** For the recipe's SDE, a velocity mismatch Δv between the two sides gives a per-element drift of about −1.48 · |dt| · (1−σ)/(a²σ) · mean(Δv²), where a is the noise level (1.2). Dividing the stock drift by |dt|·(1−σ)/σ gives a roughly constant value from t = 929 to t = 673. So the model mismatch is about the same at every step, and the falling noise scale amplifies it. The drift is always negative because the mismatch enters squared.
+
+## Per block: where the two transformers part
+
+1x NVIDIA H100 80GB HBM3 (Modal, driver 620.70.06), verl-omni `81f3b65`. Run on Nov 27, 2026 with `modal run bench/modal_app.py::run --job blocks --name c4-blocks`.
+
+[`blocks.py`](blocks.py) takes sample 0 of the stock trajectories above at t = 673. It runs one CFG pair through each transformer, hooks `txt_in`, the timestep embedding, all 60 blocks and `proj_out`, and saves the activations in fp32.
+
+- **vllm-omni** is its real loader and modules (an in-process `DiffusionWorker`), in eager mode, so this leaves out torch.compile.
+- **Prompt length:** each side sees the prompt as it does in production. vllm-omni gets it at its real length; the trainer gets it padded to 256 tokens behind a mask.
+
+Relative error ‖a − b‖ / ‖b‖ of the image stream, positive prompt:
+
+| Point | vllm-omni FA3 vs diffusers FA3 | vllm-omni reference vs diffusers SDPA | diffusers vs itself, unpadded vs padded prompt |
+| --- | --- | --- | --- |
+| txt_in | 1.7e-3 | 7.0e-5 | 7.0e-5 |
+| block 0 | 3.0e-3 | 1.5e-3 | 1.3e-3 |
+| block 10 | 4.7e-3 | 3.3e-3 | 3.2e-3 |
+| block 20 | 7.1e-3 | 5.8e-3 | 5.8e-3 |
+| block 30 | 1.5e-2 | 1.1e-2 | 1.1e-2 |
+| block 40 | 3.8e-2 | 2.9e-2 | 2.7e-2 |
+| block 50 | 4.9e-2 | 3.5e-2 | 3.1e-2 |
+| block 59 | 2.1e-3 | 1.6e-3 | 1.6e-3 |
+| proj_out | 4.2e-3 | 3.5e-3 | 3.5e-3 |
+| after CFG | 2.1e-2 | 1.7e-2 | 1.8e-2 |
+
+The timestep embedding is identical in every pair. All four comparisons are in [`modal_app.py`](modal_app.py) (`BLOCK_PAIRS`).
+
+- **The divergence isn't localised.** Every pair starts at bf16 rounding level in block 0, grows about 30x by blocks 40–50, shrinks again at the output, and ends near 2% after CFG.
+- **The last column is the control.** Diffusers against itself, with only the prompt padding changed, diverges as much as diffusers against vllm-omni's reference mode. Any bf16-sized difference grows to the same size through 60 blocks.
+- **So no single op is the cause.** Bringing one kernel closer leaves a smaller difference that grows to the same 2%. The only ways to lower the drift are bitwise-identical kernels on both sides, or fewer differences overall (turning off torch.compile, [before_after.md](before_after.md)).
